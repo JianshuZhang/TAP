@@ -1239,6 +1239,7 @@ def train(dim_word=100,  # word vector dimensionality
             f_apply_noise_to_weight() # add noise to tparams
             # compute cost, grads and copy grads to shared variables
             cost = f_grad_shared(x, x_mask, y, y_mask)
+            cost_s += cost
             f_update_miu(lrate) # update p_u
             f_update_sigma(lrate) # update p_sigma
             f_copy_weight() # copy weight from tparams_p_u to tparams

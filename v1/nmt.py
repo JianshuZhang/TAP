@@ -1,5 +1,5 @@
 '''
-Build a WAP model with coverage based spatial attention
+Build a TAP model with coverage based spatial attention
 '''
 import theano
 import theano.tensor as tensor
