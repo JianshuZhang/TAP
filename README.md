@@ -22,11 +22,11 @@ If you find TAP useful in your research, please consider citing:
 	}
 
 ## Description
-* Train TAP without weightnoise and save the best model
+* Train TAP without using weightnoise and save the best model
 
       $ bash train.sh
 	
-* Anneal the best model with weightnoise in terms of WER and save the new best model
+* Anneal the best model by using weightnoise in terms of WER and save the new best model
 
       $ bash train_weightnoise.sh
 	
