@@ -24,11 +24,15 @@ If you find TAP useful in your research, please consider citing:
 ## Description
 * Train TAP without weightnoise and save the best model
 
-	$ bash train.sh
+      $ bash train.sh
+	
 * Anneal the best model with weightnoise in terms of WER and save the new best model
-	`$ bash train_weightnoise.sh`
+
+      $ bash train_weightnoise.sh
+	
 * Reload the new best model and generate the testing latex strings
-	`$ bash test.sh`
+
+      $ bash test.sh
 
 ## Contact
 xysszjs at mail.ustc.edu.cn<br>
