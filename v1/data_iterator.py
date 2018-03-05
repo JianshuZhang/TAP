@@ -54,7 +54,7 @@ def dataIterator(feature_file,label_file,dictionary,batch_size,maxlen):
         fea=features[uid]
         lab=targets[uid]
         if len(lab)>maxlen:
-            print 'this sentence length bigger than', maxlen, 'ignore'
+            print 'sentence', uid, 'length bigger than', maxlen, 'ignore'
         else:
             uidList.append(uid)
             if i==batch_size: # a batch is full
