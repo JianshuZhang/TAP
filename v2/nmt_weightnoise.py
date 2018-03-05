@@ -1132,7 +1132,7 @@ def train(dim_word=100,  # word vector dimensionality
                          batch_size=batch_size,maxlen=maxlen)
     valid,valid_uid_list = dataIterator_valid(valid_datasets[0], valid_datasets[1],
                          worddicts,
-                         batch_size=batch_size,maxlen=maxlen)
+                         batch_size=valid_batch_size,maxlen=maxlen)
 
     print 'Building model'
     params = init_params(model_options)
