@@ -20,7 +20,7 @@ import time
 
 from collections import OrderedDict
 
-from data_iterator import dataIterator
+from data_iterator import dataIterator, dataIterator_valid
 
 profile = False
 
@@ -152,7 +152,7 @@ def main(model, dictionary_target, source_fea, source_latex, saveto, wer_file, k
     for kk, vv in worddicts.iteritems():
         worddicts_r[vv] = kk
 
-    valid,valid_uid_list = dataIterator(source_fea, source_latex,
+    valid,valid_uid_list = dataIterator_valid(source_fea, source_latex,
                          worddicts, batch_size=1, maxlen=2000)
 
     trng = RandomStreams(1234)
