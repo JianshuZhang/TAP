@@ -3,7 +3,7 @@ import os
 import sys
 
 
-from nmt import train
+from nmt_weightnoise import train
 
 def main(job_id, params):
     print params
