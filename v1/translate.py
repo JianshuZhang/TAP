@@ -196,7 +196,7 @@ def main(model, dictionary_target, source_fea, source_latex, saveto, wer_file, k
             fpp_sample.write('\n')
     fpp_sample.close()
     ud_epoch = (time.time() - ud_epoch_start) / 60.
-    print 'test set decode done, cost time ...', ud_epoch_start
+    print 'test set decode done, cost time ...', ud_epoch
     os.system('python compute-wer.py ' + saveto + ' ' + source_latex + ' ' + wer_file)
     fpp=open(wer_file)
     stuff=fpp.readlines()
