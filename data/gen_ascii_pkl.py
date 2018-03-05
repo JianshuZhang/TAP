@@ -13,7 +13,7 @@ features={}
 
 sentNum=0
 
-scpFile=open('train_data_v1.txt')
+scpFile=open('train_caption.txt')
 while 1:
     line=scpFile.readline().strip() # remove the '\r\n'
     if not line:
