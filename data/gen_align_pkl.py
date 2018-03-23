@@ -5,7 +5,7 @@ import sys
 import cPickle as pkl
 import numpy
 
-align_path='on-align-train/'
+align_path='on-align-train/' # for test.pkl, change 'train' to 'test'
 feature_path='on-ascii-train/'
 outFile='align-online-train.pkl'
 oupFp_feature=open(outFile,'wr')
