@@ -2,7 +2,7 @@
 This repository contains the source code for TAP introduced in the following papers:<br>
 
 * **v1**: [A gru-based encoder-decoder approach with attention for online handwritten mathematical expression recognition](https://arxiv.org/abs/1712.03991)<br>
-* **v2**: Track, attend and parse (TAP): An end-to-end framework for online handwritten mathematical expression recognition(Under reviewed by Transactions on Multimedia)<br>
+* **v2**: Track, attend and parse (TAP): An end-to-end framework for online handwritten mathematical expression recognition(https://ieeexplore.ieee.org/abstract/document/8373726)<br>
 
 Here, **v1** employs the coverage based spatial attention model, **v2** employs the guided hybrid attention model.<br>
 
@@ -19,6 +19,14 @@ If you find TAP useful in your research, please consider citing:
 	  booktitle={Document Analysis and Recognition (ICDAR), 2017 14th International Conference on},
 	  year={2017},
 	  organization={IEEE}
+	}
+	
+	@article{zhang2018track,
+	  title={Track, Attend and Parse (TAP): An End-to-end Framework for Online Handwritten Mathematical Expression Recognition},
+	  author={Zhang, Jianshu and Du, Jun and Dai, Lirong},
+	  journal={IEEE Transactions on Multimedia},
+	  year={2018},
+	  publisher={IEEE}
 	}
 
 ## Description
