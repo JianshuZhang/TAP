@@ -1,5 +1,5 @@
 '''
-Build a TAP model with guided hybrid attention
+Build a neural machine translation model with soft attention
 '''
 import theano
 import theano.tensor as tensor
@@ -17,9 +17,8 @@ import sys
 import time
 
 from collections import OrderedDict
-
+from optimizers import adadelta, adadelta_weightnoise, adam, adam_weightnoise, sgd_momentum, rmsprop
 from data_iterator import dataIterator,dataIterator_valid
-from optimizers import adadelta, adadelta_weightnoise
 
 profile = False
 
@@ -336,7 +335,7 @@ def gru_layer(tparams, state_below, options, prefix='gru', mask=None,
 
 # Conditional GRU layer with Attention
 def param_init_gru_cond(options, params, prefix='gru_cond',
-                        nin=None, dim=None, dimctx=None, dimatt=None, 
+                        nin=None, dim=None, dimctx=None,
                         nin_nonlin=None, dim_nonlin=None):
     if nin is None:
         nin = options['dim']
@@ -344,8 +343,6 @@ def param_init_gru_cond(options, params, prefix='gru_cond',
         dim = options['dim']
     if dimctx is None:
         dimctx = options['dim']
-    if dimatt is None:
-        dimatt = options['dim_attention']
     if nin_nonlin is None:
         nin_nonlin = nin
     if dim_nonlin is None:
@@ -374,7 +371,7 @@ def param_init_gru_cond(options, params, prefix='gru_cond',
     params[_p(prefix, 'Ux_nl')] = Ux_nl
     params[_p(prefix, 'bx_nl')] = numpy.zeros((dim_nonlin,)).astype('float32')
 
-    # context to gru
+    # context to LSTM
     Wc = norm_weight(dimctx, dim*2)
     params[_p(prefix, 'Wc')] = Wc
 
@@ -382,27 +379,37 @@ def param_init_gru_cond(options, params, prefix='gru_cond',
     params[_p(prefix, 'Wcx')] = Wcx
 
     # attention: combined -> hidden
-    W_comb_att = norm_weight(dim, dimatt)
+    W_comb_att = norm_weight(dim, dimctx)
     params[_p(prefix, 'W_comb_att')] = W_comb_att
 
     # attention: context -> hidden
-    Wc_att = norm_weight(dimctx, dimatt)
+    Wc_att = norm_weight(dimctx)
     params[_p(prefix, 'Wc_att')] = Wc_att
 
     # attention: hidden bias
-    b_att = numpy.zeros((dimatt,)).astype('float32')
+    b_att = numpy.zeros((dimctx,)).astype('float32')
     params[_p(prefix, 'b_att')] = b_att
 
     # attention:
-    U_att = norm_weight(dimatt, 1)
+    U_att = norm_weight(dimctx, 1)
     params[_p(prefix, 'U_att')] = U_att
     c_att = numpy.zeros((1,)).astype('float32')
     params[_p(prefix, 'c_tt')] = c_att
 
     # coverage conv
-    params[_p(prefix, 'conv_Q')] = conv_norm_weight(options['kernel_coverage'], 1, options['dim_coverage']).astype('float32')
-    params[_p(prefix, 'conv_Uf')] = norm_weight(options['dim_coverage'], dimatt)
-    params[_p(prefix, 'conv_b')] = numpy.zeros((dimatt,)).astype('float32')
+    params[_p(prefix, 'conv_Q')] = conv_norm_weight(options['dim_coverage'], 1, dim_nonlin)
+    params[_p(prefix, 'conv_Uf')] = norm_weight(dim_nonlin, dimctx)
+    params[_p(prefix, 'conv_b')] = numpy.zeros((dimctx,)).astype('float32')
+
+    # when to attention
+    params[_p(prefix, 'Wyg')] = norm_weight(nin_nonlin, 2*options['dim_enc'][-1])
+    params[_p(prefix, 'byg')] = numpy.zeros((2*options['dim_enc'][-1],)).astype('float32')
+    params[_p(prefix, 'Whg')] = norm_weight(dim_nonlin, 2*options['dim_enc'][-1])
+    params[_p(prefix, 'bhg')] = numpy.zeros((2*options['dim_enc'][-1],)).astype('float32')
+    params[_p(prefix, 'Umg')] = norm_weight(dim_nonlin, 2*options['dim_enc'][-1])
+    params[_p(prefix, 'W_m_att')] = norm_weight(2*options['dim_enc'][-1], dimctx)
+    params[_p(prefix, 'U_when_att')] = norm_weight(dimctx, 1)
+    params[_p(prefix, 'c_when_att')] = numpy.zeros((1,)).astype('float32')
     return params
 
 
@@ -429,6 +436,7 @@ def gru_cond_layer(tparams, state_below, options, prefix='gru',
 
     dim = tparams[_p(prefix, 'Wcx')].shape[1]
     dimctx = tparams[_p(prefix, 'Wcx')].shape[0]
+    pad = (tparams[_p(prefix, 'conv_Q')].shape[2]-1)/2
 
     # initial/previous state
     if init_state is None:
@@ -454,16 +462,20 @@ def gru_cond_layer(tparams, state_below, options, prefix='gru',
         tparams[_p(prefix, 'bx')]
     state_below_ = tensor.dot(state_below, tparams[_p(prefix, 'W')]) +\
         tparams[_p(prefix, 'b')]
+    state_belowyg = tensor.dot(state_below, tparams[_p(prefix, 'Wyg')]) +\
+        tparams[_p(prefix, 'byg')]
 
-    def _step_slice(m_, x_, xx_, h_, ctx_, alpha_, alpha_past_, pctx_, cc_,
-                    U, Wc, W_comb_att, U_att, c_tt, Ux, Wcx,
-                    U_nl, Ux_nl, b_nl, bx_nl, conv_Q, conv_Uf, conv_b):
+    # state_below_ : x_  1*dim ; state_belowx : xx_  2*dim ; represents E*y
+
+    def _step_slice(m_, x_, xx_, yg, h_, ctx_, alpha_, alpha_past_, beta, pctx_, cc_,
+                    U, Wc, W_comb_att, U_att, c_tt, Ux, Wcx, U_nl, Ux_nl, b_nl, bx_nl, conv_Q, conv_Uf, conv_b, 
+                    Whg, bhg, Umg, W_m_att, U_when_att, c_when_att):
         preact1 = tensor.dot(h_, U)
         preact1 += x_
         preact1 = tensor.nnet.sigmoid(preact1)
 
-        r1 = _slice(preact1, 0, dim)
-        u1 = _slice(preact1, 1, dim)
+        r1 = _slice(preact1, 0, dim) # reset gate
+        u1 = _slice(preact1, 1, dim) # update gate
 
         preactx1 = tensor.dot(h_, Ux)
         preactx1 *= r1
@@ -473,7 +485,13 @@ def gru_cond_layer(tparams, state_below, options, prefix='gru',
 
         h1 = u1 * h_ + (1. - u1) * h1
         h1 = m_[:, None] * h1 + (1. - m_)[:, None] * h_
-
+        
+        g_m = tensor.dot(h_, Whg) + bhg
+        g_m += yg
+        g_m = tensor.nnet.sigmoid(g_m)
+        mt = tensor.dot(h1, Umg)
+        mt = tensor.tanh(mt)
+        mt *= g_m
         # attention
         pstate_ = tensor.dot(h1, W_comb_att)
 
@@ -483,6 +501,7 @@ def gru_cond_layer(tparams, state_below, options, prefix='gru',
         cover_F = cover_F.reshape([cover_F.shape[0],cover_F.shape[1],cover_F.shape[2]])
         assert cover_F.ndim == 3, \
             'Output of conv must be 3-d: #dim x SeqL x batch'
+        #cover_F = cover_F[:,pad:-pad,:]
         cover_F = cover_F.dimshuffle(1, 2, 0)
         # cover_F must be SeqL x batch x dimctx
         cover_vector = tensor.dot(cover_F, conv_Uf) + conv_b
@@ -492,14 +511,29 @@ def gru_cond_layer(tparams, state_below, options, prefix='gru',
         #pctx__ += xc_
         pctx__ = tensor.tanh(pctx__)
         alpha = tensor.dot(pctx__, U_att)+c_tt
-        alpha = alpha - alpha.max()
-        alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]])
+        # compute alpha_when
+        
+        pctx_when = tensor.dot(mt, W_m_att)
+        pctx_when += pstate_
+        pctx_when = tensor.tanh(pctx_when)
+        alpha_when = tensor.dot(pctx_when, U_when_att)+c_when_att # batch * 1
+        
+        alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]]) # SeqL * batch
         alpha = tensor.exp(alpha)
+        alpha_when = tensor.exp(alpha_when)
         if context_mask:
             alpha = alpha * context_mask
+        if context_mask:
+            alpha_mean = alpha.sum(0, keepdims=True) / context_mask.sum(0, keepdims=True)
+        else:
+            alpha_mean = alpha.mean(0, keepdims=True)
+        alpha_when = concatenate([alpha_mean, alpha_when.T], axis=0) # (SeqL+1)*batch
         alpha = alpha / alpha.sum(0, keepdims=True)
+        alpha_when = alpha_when / alpha_when.sum(0, keepdims=True)
+        beta = alpha_when[-1, :]
         alpha_past = alpha_past_ + alpha.T
         ctx_ = (cc_ * alpha[:, :, None]).sum(0)  # current context
+        ctx_ = beta[:, None] * mt + (1. - beta)[:, None] * ctx_
 
         preact2 = tensor.dot(h1, U_nl)+b_nl
         preact2 += tensor.dot(ctx_, Wc)
@@ -517,9 +551,9 @@ def gru_cond_layer(tparams, state_below, options, prefix='gru',
         h2 = u2 * h1 + (1. - u2) * h2
         h2 = m_[:, None] * h2 + (1. - m_)[:, None] * h1
 
-        return h2, ctx_, alpha.T, alpha_past  # pstate_, preact, preactx, r, u
+        return h2, ctx_, alpha.T, alpha_past, beta  # pstate_, preact, preactx, r, u
 
-    seqs = [mask, state_below_, state_belowx]
+    seqs = [mask, state_below_, state_belowx, state_belowyg]
     #seqs = [mask, state_below_, state_belowx, state_belowc]
     _step = _step_slice
 
@@ -536,10 +570,16 @@ def gru_cond_layer(tparams, state_below, options, prefix='gru',
                    tparams[_p(prefix, 'bx_nl')],
                    tparams[_p(prefix, 'conv_Q')],
                    tparams[_p(prefix, 'conv_Uf')],
-                   tparams[_p(prefix, 'conv_b')]]
+                   tparams[_p(prefix, 'conv_b')],
+                   tparams[_p(prefix, 'Whg')],
+                   tparams[_p(prefix, 'bhg')],
+                   tparams[_p(prefix, 'Umg')],
+                   tparams[_p(prefix, 'W_m_att')],
+                   tparams[_p(prefix, 'U_when_att')],
+                   tparams[_p(prefix, 'c_when_att')]]
 
     if one_step:
-        rval = _step(*(seqs + [init_state, None, None, alpha_past, pctx_, context] +
+        rval = _step(*(seqs + [init_state, None, None, alpha_past, None, pctx_, context] +
                        shared_vars))
     else:
         rval, updates = theano.scan(_step,
@@ -550,7 +590,8 @@ def gru_cond_layer(tparams, state_below, options, prefix='gru',
                                                   tensor.alloc(0., n_samples,
                                                                context.shape[0]),
                                                   tensor.alloc(0., n_samples,
-                                                               context.shape[0])],
+                                                               context.shape[0]),
+                                                  tensor.alloc(0., n_samples,)],
                                     non_sequences=[pctx_, context]+shared_vars,
                                     name=_p(prefix, '_layers'),
                                     n_steps=nsteps,
@@ -597,10 +638,9 @@ def init_params(options):
                                               prefix='decoder',
                                               nin=options['dim_word'],
                                               dim=options['dim_dec'],
-                                              dimctx=ctxdim,
-                                              dimatt=options['dim_attention'])
+                                              dimctx=ctxdim)
     # readout
-    params = get_layer('ff')[0](options, params, prefix='ff_logit_gru',
+    params = get_layer('ff')[0](options, params, prefix='ff_logit_lstm',
                                 nin=options['dim_dec'], nout=options['dim_word'],
                                 ortho=False)
     params = get_layer('ff')[0](options, params, prefix='ff_logit_prev',
@@ -706,18 +746,18 @@ def build_model(tparams, options):
 
     # weights (alignment matrix)
     opt_ret['dec_alphas'] = proj[2] # SeqY * batch * SeqX while a -- SeqX * batch * SeqY
-    #dec_alphas = proj[2].dimshuffle(2, 1, 0) + tensor.alloc(1e-20, a.shape[0], a.shape[1], a.shape[2]) # SeqX * batch * SeqY
+    
     dec_alphas = proj[2].dimshuffle(2, 1, 0) + numpy.array(1e-20).astype('float32')
     cost_alphas = - a * tensor.log(dec_alphas) * a_mask
 
     # compute word probabilities
-    logit_gru = get_layer('ff')[1](tparams, proj_h, options,
-                                    prefix='ff_logit_gru', activ='linear')
+    logit_lstm = get_layer('ff')[1](tparams, proj_h, options,
+                                    prefix='ff_logit_lstm', activ='linear')
     logit_prev = get_layer('ff')[1](tparams, emb, options,
                                     prefix='ff_logit_prev', activ='linear')
     logit_ctx = get_layer('ff')[1](tparams, ctxs, options,
                                    prefix='ff_logit_ctx', activ='linear')
-    logit = logit_gru+logit_prev+logit_ctx
+    logit = logit_lstm+logit_prev+logit_ctx
 
     # maxout 2
     # maxout layer
@@ -802,13 +842,13 @@ def build_sampler(tparams, options, trng):
     ctxs = proj[1]
     next_alpha_past = proj[3]
 
-    logit_gru = get_layer('ff')[1](tparams, next_state, options,
-                                    prefix='ff_logit_gru', activ='linear')
+    logit_lstm = get_layer('ff')[1](tparams, next_state, options,
+                                    prefix='ff_logit_lstm', activ='linear')
     logit_prev = get_layer('ff')[1](tparams, emb, options,
                                     prefix='ff_logit_prev', activ='linear')
     logit_ctx = get_layer('ff')[1](tparams, ctxs, options,
                                    prefix='ff_logit_ctx', activ='linear')
-    logit = logit_gru+logit_prev+logit_ctx
+    logit = logit_lstm+logit_prev+logit_ctx
 
     # maxout layer
     shape = logit.shape
@@ -832,7 +872,7 @@ def build_sampler(tparams, options, trng):
     print 'Building f_next..',
     inps = [y, ctx, init_state, alpha_past]
     outs = [next_probs, next_sample, next_state, next_alpha_past]
-    f_next = theano.function(inps, outs, name='f_next', profile=profile,on_unused_input='ignore')
+    f_next = theano.function(inps, outs, name='f_next', profile=profile, on_unused_input='ignore')
     print 'Done'
 
     return f_init, f_next
@@ -983,7 +1023,6 @@ def load_dict(dictFile):
     print 'total words/phones',len(lexicon)
     return lexicon
 
-
 def apply_adative_noise(tparams,options,trng,grads,num_examples):
     log_sigma_scale = 2048.0
     init_sigma = 1.0e-12
@@ -1069,15 +1108,11 @@ def apply_adative_noise(tparams,options,trng,grads,num_examples):
 
     return f_apply_noise_to_weight,f_copy_weight,new_grads_miu,new_grads_sigma,tparams_p_u,tparams_p_ls2 #,tparams_p_s2
 
-
-
 def train(dim_word=100,  # word vector dimensionality
-          dim_enc=1000,
-          dim_dec=1000,
+          dim_enc=1000,  # the number of LSTM units
+          dim_dec=1000,  # the number of LSTM units
           down_sample=0,
-          dim_attention=500,
           dim_coverage=5,
-          kernel_coverage=121,
           encoder='gru',
           decoder='gru_cond',
           patience=4,  # early stopping patience
@@ -1106,8 +1141,6 @@ def train(dim_word=100,  # word vector dimensionality
           valid_datasets=['feature_valid.pkl', 
                           'label_valid.txt'],
           dictionaries=['lexicon.txt'],
-          valid_output=['decode.txt'],
-          valid_result=['result.txt'],
           use_dropout=False,
           reload_=False):
 
@@ -1129,10 +1162,10 @@ def train(dim_word=100,  # word vector dimensionality
     print 'Loading data'
     train = dataIterator(datasets[0], datasets[1], datasets[2],
                          worddicts,
-                         batch_size=batch_size,maxlen=maxlen)
+                         batch_size=batch_size, maxlen=maxlen)
     valid,valid_uid_list = dataIterator_valid(valid_datasets[0], valid_datasets[1],
                          worddicts,
-                         batch_size=valid_batch_size,maxlen=maxlen)
+                         batch_size=batch_size, maxlen=maxlen)
 
     print 'Building model'
     params = init_params(model_options)
@@ -1201,27 +1234,22 @@ def train(dim_word=100,  # word vector dimensionality
     f_apply_noise_to_weight,f_copy_weight,new_grads_miu,new_grads_sigma, \
                 tparams_p_u,tparams_p_ls2=apply_adative_noise(tparams,model_options,trng,grads,2*8835)
 
-    # compile the optimizer, the actual computational graph is compiled here
     print 'Building optimizer for miu and sigma'
     lr = tensor.scalar(name='lr')
     f_grad_shared, f_update_miu, f_update_sigma = eval(optimizer)(lr, tparams_p_u, tparams_p_ls2, new_grads_miu, new_grads_sigma, inps, cost)
     print 'Done'
 
-    
-    
     # print model parameters
     print "Model params:\n{0}".format(
             pprint.pformat(sorted([p for p in params])))
     # end
 
-
-
     print 'Optimization'
 
     history_errs = []
     # reload history
-    if reload_ and os.path.exists(saveto):
-        history_errs = list(numpy.load(saveto)['history_errs'])
+    #if reload_ and os.path.exists(saveto):
+    #    history_errs = list(numpy.load(saveto)['history_errs'])
     best_p = None
     bad_count = 0
 
@@ -1238,13 +1266,11 @@ def train(dim_word=100,  # word vector dimensionality
     bad_counter = 0
     ud_s = 0
     ud_epoch = 0
-    cost_s = 0.
     for eidx in xrange(max_epochs):
         n_samples = 0
 
         random.shuffle(train) # shuffle data
         ud_epoch_start = time.time()
-
         for x, y, a in train:
             n_samples += len(x)
             uidx += 1
@@ -1259,11 +1285,9 @@ def train(dim_word=100,  # word vector dimensionality
                 uidx -= 1
                 continue
 
-            # compute cost, grads and copy grads to shared variables
             f_apply_noise_to_weight() # add noise to tparams
             # compute cost, grads and copy grads to shared variables
             cost = f_grad_shared(x, x_mask, y, y_mask, a, a_mask)
-            cost_s += cost
             f_update_miu(lrate) # update p_u
             f_update_sigma(lrate) # update p_sigma
             f_copy_weight() # copy weight from tparams_p_u to tparams
@@ -1279,10 +1303,8 @@ def train(dim_word=100,  # word vector dimensionality
             # verbose
             if numpy.mod(uidx, dispFreq) == 0:
                 ud_s /= 60.
-                cost_s /= dispFreq
-                print 'Epoch ', eidx, 'Update ', uidx, 'Cost ', cost_s, 'UD ', ud_s, 'epson ',lrate, 'bad_counter', bad_counter
+                print 'Epoch ', eidx, 'Update ', uidx, 'Cost ', cost, 'UD ', ud_s, 'epson ',lrate, 'bad_counter', bad_counter
                 ud_s = 0
-                cost_s = 0.
 
             # save the best model so far
             if numpy.mod(uidx, saveFreq) == 0:
@@ -1299,7 +1321,7 @@ def train(dim_word=100,  # word vector dimensionality
             # generate some samples with the model and display them
             if numpy.mod(uidx, sampleFreq) == 0:
                 # FIXME: random selection?
-                fpp_sample=open(valid_output[0],'w')
+                fpp_sample=open('./result/valid_decode_result.txt','w')
                 valid_count_idx=0
                 # FIXME: random selection?
                 for x,y in valid:
@@ -1333,7 +1355,6 @@ def train(dim_word=100,  # word vector dimensionality
                 print 'cost time ... ', ud_epoch
 
 
-
             # validate model on validation set and early stop if necessary
             if numpy.mod(uidx, validFreq) == 0:
                 use_noise.set_value(0.)
@@ -1341,30 +1362,23 @@ def train(dim_word=100,  # word vector dimensionality
                                         #model_options, valid)
                 #valid_err_cost = valid_errs.mean()
                 
-
                 # compute wer
-                os.system('python compute-wer.py ' + valid_output[0] + ' ' + valid_datasets[1] + ' ' + valid_result[0])
-                fpp=open(valid_result[0])
+                os.system('python compute-wer.py ./result/valid_decode_result.txt ' + valid_datasets[1] + ' ./result/valid.wer')
+                fpp=open('./result/valid.wer') # %WER 31.63
                 stuff=fpp.readlines()
                 fpp.close()
                 m=re.search('WER (.*)\n',stuff[0])
                 valid_per=100. * float(m.group(1))
-                m=re.search('ExpRate (.*)\n',stuff[1])
+                m=re.search('SACC (.*)\n',stuff[1])
                 valid_sacc=100. * float(m.group(1))
-                #valid_err=0.7*valid_per-0.3*valid_sacc
-                valid_err=valid_per
+                valid_err=0.6*valid_per+0.4*(100.-valid_sacc)
+                #valid_err=valid_per
                 history_errs.append(valid_err)
 
                 if uidx/validFreq == 0 or valid_err <= numpy.array(history_errs).min(): # the first time valid or worse model
                     best_p = unzip(tparams)
                     bad_counter = 0
-                # if len(history_errs) > patience and valid_err >= \
-                #         numpy.array(history_errs)[:-patience].min():
-                #     bad_counter += 1
-                #     if bad_counter > patience:
-                #         print 'Early Stop!'
-                #         estop = True
-                #         break
+
                 if uidx/validFreq != 0 and valid_err > numpy.array(history_errs).min():
                     bad_counter += 1
                     if bad_counter > patience:
@@ -1383,7 +1397,8 @@ def train(dim_word=100,  # word vector dimensionality
                     #ipdb.set_trace()
                     print 'valid_err nan'
 
-                print 'Valid WER: %.2f%%, ExpRate: %.2f%%' % (valid_per,valid_sacc)
+                #print 'Valid WER: %.2f%%, SACC: %.2f%%, Cost: %f' % (valid_per,valid_sacc,valid_err_cost)
+                print 'Valid WER: %.2f%%, SACC: %.2f%%' % (valid_per,valid_sacc)
 
             # finish after this many updates
             if uidx >= finish_after:

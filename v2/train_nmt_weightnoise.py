@@ -2,8 +2,7 @@ import numpy
 import os
 import sys
 
-
-from nmt_weightnoise import train
+from nmt import train
 
 def main(job_id, params):
     print params
@@ -12,9 +11,7 @@ def main(job_id, params):
                      dim_word=params['dim_word'][0],
                      dim_enc=params['dim_enc'], # multi layer
                      dim_dec=params['dim_dec'][0], 
-                     dim_attention=params['dim_attention'][0],
                      dim_coverage=params['dim_coverage'][0],
-                     kernel_coverage=params['kernel_coverage'][0],
                      down_sample=params['down_sample'],
                      dim_target=params['dim_target'][0],
                      dim_feature=params['dim_feature'][0],
@@ -38,21 +35,17 @@ def main(job_id, params):
           valid_datasets=['../data/online-test.pkl',
                     '../data/test_caption.txt'],
           dictionaries=['../data/dictionary.txt'],
-          valid_output=['./result/valid_decode_result.txt'],
-          valid_result=['./result/valid.wer'],
                          use_dropout=params['use-dropout'][0])
     return validerr
 
 if __name__ == '__main__':
     
-    maxlen=[200]
+    maxlen=[400]
     modelDir=sys.argv[1]
     dim_word=[256]
     dim_enc=[250,250,250,250] # they are bidirectional
     dim_dec=[256]
-    dim_attention=[500]
-    dim_coverage=[256]
-    kernel_coverage=[121]
+    dim_coverage=[121]
     down_sample=[0,0,1,1]
 
         
@@ -61,9 +54,7 @@ if __name__ == '__main__':
         'dim_word': dim_word,
         'dim_enc': dim_enc,
         'dim_dec': dim_dec,
-        'dim_attention': dim_attention,
         'dim_coverage': dim_coverage,
-        'kernel_coverage': kernel_coverage,
         'down_sample':down_sample,
         'dim_target': [111], 
         'dim_feature': [9], 
