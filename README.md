@@ -13,21 +13,25 @@ Here, **v1** employs the coverage based spatial attention model, **v2** employs 
 ## Citation
 If you find TAP useful in your research, please consider citing:
 
-	@inproceedings{zhang2017gru,
-	  title={A GRU-based Encoder-Decoder Approach with Attention for Online Handwritten Mathematical Expression Recognition},
-	  author={Zhang, Jianshu and Du, Jun and Dai, Lirong},
-	  booktitle={Document Analysis and Recognition (ICDAR), 2017 14th International Conference on},
-	  year={2017},
-	  organization={IEEE}
-	}
+	@inproceedings{zhang2017icdar,
+      title={A GRU-based Encoder-Decoder Approach with Attention for Online Handwritten Mathematical Expression Recognition},
+      author={Jianshu Zhang and Jun Du and Lirong Dai},
+      booktitle={International Conference on Document Analysis and Recognition},
+      volume={1},
+      pages={902--907},
+      year={2017}
+    }
+
 	
-	@article{zhang2018track,
-	  title={Track, Attend and Parse (TAP): An End-to-end Framework for Online Handwritten Mathematical Expression Recognition},
-	  author={Zhang, Jianshu and Du, Jun and Dai, Lirong},
-	  journal={IEEE Transactions on Multimedia},
-	  year={2018},
-	  publisher={IEEE}
-	}
+	@article{zhang2019track,
+      title={Track, Attend and Parse (TAP): An End-to-end Framework for Online Handwritten Mathematical Expression Recognition},
+      author={Zhang, Jianshu and Du, Jun and Dai, Lirong},
+      journal={IEEE Transactions on Multimedia},
+      volume={21},
+      number={1},
+      pages={221--233},
+      year={2019}
+    }
 
 ## Description
 * Train TAP without using weightnoise and save the best model in terms of WER
